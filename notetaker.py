@@ -11,6 +11,7 @@ import threading
 from datetime import datetime
 
 import config
+import local_notes
 from audio_listener import build_listener
 from integrations import store
 from transcriber import build_transcriber
@@ -137,9 +138,12 @@ class NoteTaker:
         date = datetime.now().strftime("%Y-%m-%d")
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # Prefer the real calendar title; otherwise ask the model to name it,
-        # falling back to a timestamp if Ollama is unreachable.
-        title = (event.title if event and event.title else "") or generate_title(transcript)
+        # Prefer the real calendar title; otherwise ask the model to name it.
+        # With no model, the most distinctive words actually said still beat a
+        # bare timestamp when you are looking for a meeting six weeks later.
+        title = ((event.title if event and event.title else "")
+                 or generate_title(transcript)
+                 or local_notes.title(transcript))
         base = f"{date}_{_slugify(title)}" if title else f"meeting_{stamp}"
 
         # Transcript is a plain .txt file named with the meeting name.
@@ -149,16 +153,26 @@ class NoteTaker:
             f.write(f"{header}\n{'=' * len(header)}\nSaved: {stamp}\n\n"
                     f"{transcript}\n")
 
+        # Notes are always written now. Reaching the model is the good path,
+        # but a recording that produced nothing but a wall of timestamps is a
+        # bad outcome for a reason the person recording often cannot fix —
+        # Ollama is a separate application and a multi-gigabyte download. The
+        # built-in writer needs neither and cannot fail, so what used to be a
+        # missing file is now a downgrade the UI can explain.
         summary_error = None
-        notes = None
         summary_path = _unique(os.path.join(out_dir, f"{base}-notes.md"))
         try:
             notes = summarize(transcript)
-            with open(summary_path, "w", encoding="utf-8") as f:
-                f.write(f"# {title or 'Meeting Notes'} — {stamp}\n\n{notes}\n")
         except Exception as e:  # noqa: BLE001
             summary_error = str(e)
-            summary_path = None
+            notes = local_notes.summarize(transcript)
+
+        # Counted facts go onto every set of notes, the model's included: a
+        # summary can be confidently wrong about who said what; a tally can't.
+        extra = local_notes.facts(transcript)
+        notes = f"{notes}\n\n{extra}" if extra else notes
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write(f"# {title or 'Meeting Notes'} — {stamp}\n\n{notes}\n")
 
         self._dirty = False  # written to disk; don't re-save on quit
         return ({"transcript": transcript_path, "summary": summary_path,

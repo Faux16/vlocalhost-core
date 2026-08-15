@@ -355,7 +355,11 @@ class App:
         if result.get("delivered"):
             parts.append(result["delivered"])
         if result.get("error"):
-            parts.append(f"summary failed: {result['error']}")
+            # Notes were still written, by the built-in writer — saying
+            # "summary failed" next to a summary file that exists reads as a
+            # bug. Name the downgrade instead.
+            parts.append("used built-in notes (no local model): "
+                         f"{result['error']}")
         self.result_label.configure(text="  ·  ".join(parts), style="Muted.TLabel")
         self._say("— saved —", "hint")
 
@@ -772,6 +776,14 @@ class App:
         self.ollama_box.pack(side="left")
         ttk.Button(summ, text="List…", width=8,
                    command=self._list_ollama_models).pack(side="left", padx=(6, 0))
+        # The setup wizard can already pull a model, but only during setup.
+        # Anyone who skipped it then — or installed Ollama afterwards — was
+        # left with a CLI command in an error message, which is where most
+        # people stop. Same helper, reachable later.
+        self.pull_btn = ttk.Button(summ, text="Download", width=10,
+                                   command=self._pull_ollama_model)
+        self.pull_btn.pack(side="left", padx=(6, 0))
+        self.pull_btn.configure(state="disabled")
         self.ollama_label = ttk.Label(models, text="checking Ollama…",
                                       style="Muted.TLabel")
         self.ollama_label.grid(row=6, column=2, sticky="w")
@@ -1018,9 +1030,52 @@ class App:
 
     def _check_ollama(self):
         ok, detail = engine_mod.check_ollama()
-        self._ui_q.put(lambda: self.ollama_label.configure(
-            text=("✓ " if ok else "✗ ") + detail,
-            style="Good.TLabel" if ok else "Bad.TLabel"))
+        # "running, but ... isn't pulled" is the one failure the app can fix
+        # by itself; not reachable at all needs Ollama installed first, and no
+        # button here can do that.
+        fixable = not ok and "running, but" in detail
+
+        def apply():
+            self.ollama_label.configure(
+                text=("✓ " if ok else "✗ ") + detail,
+                style="Good.TLabel" if ok else "Bad.TLabel")
+            self.pull_btn.configure(state="normal" if fixable else "disabled")
+
+        self._ui_q.put(apply)
+
+    def _pull_ollama_model(self):
+        """Download the summary model through the running Ollama."""
+        import setup_wizard   # lazy, like every other use of it in this file
+
+        model = self.ollama_var.get().strip() or config.OLLAMA_MODEL
+        url = self.ollama_url_var.get().strip()
+        if not messagebox.askyesno(
+                "Download model",
+                f"Download “{model}” through Ollama?\n\n"
+                "This is typically 2 GB and runs in the background. Recording "
+                "and transcription work without it — only the written summary "
+                "needs it."):
+            return
+        self.pull_btn.configure(state="disabled")
+
+        def tick(fraction, status):
+            pct = f"{fraction * 100:.0f}% — " if fraction is not None else ""
+            self._ui_q.put(lambda: self.ollama_label.configure(
+                text=f"downloading {model}: {pct}{status}",
+                style="Muted.TLabel"))
+
+        def worker():
+            error = setup_wizard.pull_model(model, url, tick)
+            if error:
+                self._ui_q.put(lambda: self.ollama_label.configure(
+                    text=f"✗ download failed: {error}", style="Bad.TLabel"))
+                self._ui_q.put(
+                    lambda: self.pull_btn.configure(state="normal"))
+            else:
+                self._check_ollama()          # re-probe rather than assume
+                self._ui_q.put(self._list_ollama_models)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _copy_mcp(self):
         """Point the assistant at whatever script launched this process.

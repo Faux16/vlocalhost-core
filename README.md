@@ -293,8 +293,18 @@ you only want to record your own meetings privately, you are already done.
   the transcript is rough.
 - Everyone on the far end currently shares one label — see
   [`docs/speaker-identification.md`](docs/speaker-identification.md).
-- Summarization needs Ollama running; if it isn't, the transcript is still saved
-  and the app tells you the summary step failed.
+- Notes are always written. Ollama, when it is running with a model pulled,
+  writes the good ones. Without it the app falls back to **built-in notes** —
+  key points, decisions, action items and questions selected from the
+  transcript by [`local_notes.py`](local_notes.py), with no model, no download and no network.
+  They are labelled as such, and cannot invent anything, because every line is
+  one somebody said.
+- A **Meeting facts** section — who spoke how much, how long it ran, what was
+  asked — is appended to every set of notes, the model's included. Those are
+  counted rather than generated, so they are the part that cannot be
+  confidently wrong.
+- If Ollama is running but has no model, Settings offers a **Download** button
+  rather than a command to paste into a terminal.
 
 ## Files
 
@@ -302,6 +312,7 @@ you only want to record your own meetings privately, you are already done.
 |---|---|
 | `vlocalhost.py` | Entry point — window, tray, terminal, MCP. |
 | `gui.py` | The desktop window. |
+| `local_notes.py` | Notes with no model — the fallback, and the counted facts. |
 | `engine.py` | Shared session engine every front end drives. |
 | `mcp_server.py` | MCP server (stdio, no extra dependencies). |
 | `notetaker.py` | Capture → transcribe → summarize; saves the files. |
